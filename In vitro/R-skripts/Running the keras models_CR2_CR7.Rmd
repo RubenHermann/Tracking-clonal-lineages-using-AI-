@@ -1,0 +1,165 @@
+---
+title: "Running the keras models"
+author: "Ruben Hermann"
+date: "2023-05-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+
+library(tidyverse)
+```
+
+
+##
+```{r}
+freq_dat_all<-NULL
+model <- load_model_hdf5("Distinguish CR2vCR7 clones with feature values_in_vitro.h5") 
+
+
+# here I read in the right training data, as I need to scale the data set with their mean and sd for the right prediction
+cloneA_train <- read.csv("../Data/Data for model set-up/Train_CR2.csv")
+cloneB_train <- read.csv("../Data/Data for model set-up/Train_CR7.csv")
+
+#Calcualting the mean and sd of the training data
+train_all <- rbind(cloneA_train,cloneB_train)
+train_all <- select(train_all,-X)
+train_all <- select(train_all,-ID)
+mean <- apply(train_all,2,mean)
+std <- apply(train_all,2,sd)
+
+
+#Loading in the frequency samples
+setwd("../Data/Raw Data/CR2-CR7 frequencies")
+temp= list.files(pattern=".txt")
+listofdf<-list()
+for (i in 1:length(temp)) {
+  assign(temp[i],read.delim(temp[i],skip=3,dec=","))
+  listofdf[[i]]=read.delim(temp[i],skip=3,dec=",")}
+names(listofdf) <- temp
+
+
+#A loop to take out the single data frames for predictions
+  for (j in 1:length(listofdf)) {
+    df <- listofdf[[j]]
+    name<-str_split_1(temp[j],"_")
+#Taking out the frequency of clone B, which is estimated through densities and pipetting defined volumes of both clones
+    cloneB_freq <- (as.numeric(name[2]))/100
+      
+df <- select(df,-Time)
+df <- select(df,-Raw.Centroid.X)
+df <- select(df,-Raw.Centroid.Y)
+df <- select(df,-Flow.Speed)
+
+
+#scaling with the mean and sd of the training data
+df_sc <- scale(df,center=mean,scale=std)
+df_sc <- as.data.frame(df_sc)
+
+#Now getting rid of the unecessary features
+list=names(df_sc)
+list <- list[list != 'Object.Number'] # removing the object number it is not needed
+list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+#apply the list back to the data frame
+df_sc <- df_sc %>% dplyr::select(all_of(list))
+  
+no_vars=length(list)
+test_x <- df_sc[,1:no_vars] %>% as.matrix
+
+predict <- model %>% predict(test_x)
+  
+pred<-data.frame(pred_ID=rep(0,nrow(predict)))
+
+#Comparing the predicted data with the real data
+    for (i in 1:nrow(predict)){
+      #Which clone is predicted by the model
+      pred$pred_ID[i]=which.max(predict[i,])
+      #Categorizing the clones into defended and undefended (clones 1,2,3 as defended and 4,5,6 as undefended)
+    }
+    freq_dat <- data.frame(pred_cloneA_freq=length(pred$pred_ID[pred$pred_ID==1])/length(pred$pred_ID),
+                           pred_cloneB_freq=length(pred$pred_ID[pred$pred_ID==2])/length(pred$pred_ID),
+                        clone_A="CR2",clone_B="CR7",clone_A_freq=1-cloneB_freq,
+                        clone_B_freq=cloneB_freq, samples=nrow(df))
+    
+freq_dat_all <- rbind(freq_dat_all,freq_dat)
+}
+##################################
+#Now as well the test data for CR2 and CR7
+setwd("../../Data for model set-up")
+df <- read.csv("Test_CR2_both.csv")
+df <- select(df,c(-X,-ID))
+
+df_sc <- scale(df,center=mean,scale=std)
+df_sc <- as.data.frame(df_sc)
+
+#Now getting rid of the unecessary features
+list=names(df_sc)
+list <- list[list != 'Object.Number'] # removing the object number it is not needed
+list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+#apply the list back to the data frame
+df_sc <- df_sc %>% dplyr::select(all_of(list))
+  
+no_vars=length(list)
+test_x <- df_sc[,1:no_vars] %>% as.matrix
+
+predict <- model %>% predict(test_x)
+  
+pred<-data.frame(pred_ID=rep(0,nrow(predict)))
+
+#Comparing the predicted data with the real data
+    for (i in 1:nrow(predict)){
+      #Which clone is predicted by the model
+      pred$pred_ID[i]=which.max(predict[i,])
+      #Categorizing the clones into defended and undefended (clones 1,2,3 as defended and 4,5,6 as undefended)
+    }
+    freq_dat <- data.frame(pred_cloneA_freq=length(pred$pred_ID[pred$pred_ID==1])/length(pred$pred_ID),
+                           pred_cloneB_freq=length(pred$pred_ID[pred$pred_ID==2])/length(pred$pred_ID),
+                        clone_A="CR2",clone_B="CR7",clone_A_freq=1,
+                        clone_B_freq=0, samples=nrow(df))
+    
+freq_dat_all <- rbind(freq_dat_all,freq_dat)
+
+##########################################################################################
+df <- read.csv("Test_CR7_both.csv")
+df <- select(df,c(-X,-ID))
+
+df_sc <- scale(df,center=mean,scale=std)
+df_sc <- as.data.frame(df_sc)
+
+#Now getting rid of the unecessary features
+list=names(df_sc)
+list <- list[list != 'Object.Number'] # removing the object number it is not needed
+list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+#apply the list back to the data frame
+df_sc <- df_sc %>% dplyr::select(all_of(list))
+  
+no_vars=length(list)
+test_x <- df_sc[,1:no_vars] %>% as.matrix
+
+predict <- model %>% predict(test_x)
+  
+pred<-data.frame(pred_ID=rep(0,nrow(predict)))
+
+#Comparing the predicted data with the real data
+    for (i in 1:nrow(predict)){
+      #Which clone is predicted by the model
+      pred$pred_ID[i]=which.max(predict[i,])
+      #Categorizing the clones into defended and undefended (clones 1,2,3 as defended and 4,5,6 as undefended)
+    }
+    freq_dat <- data.frame(pred_cloneA_freq=length(pred$pred_ID[pred$pred_ID==1])/length(pred$pred_ID),
+                           pred_cloneB_freq=length(pred$pred_ID[pred$pred_ID==2])/length(pred$pred_ID),
+                        clone_A="CR2",clone_B="CR7",clone_A_freq=0,
+                        clone_B_freq=1, samples=nrow(df))
+    
+freq_dat_all <- rbind(freq_dat_all,freq_dat)
+
+
+
+write.csv(freq_dat_all,"Predicted frequencies_CR2_CR7_both.csv")
+```
+
+

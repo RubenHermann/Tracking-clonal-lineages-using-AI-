@@ -1,0 +1,254 @@
+---
+title: "Accuracy testing for training size"
+author: "Ruben Hermann"
+date: '2022-04-21'
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+rm(list=ls())
+
+library(keras)
+library(tidyverse)
+```
+
+## Function
+
+Here is the function which takes in a data frame per clonal lineage, test data and value indication training data size
+
+The data frames from the clonal lineages are separated into training and validation data during the function
+The test data is of all 6 lineages, which was separated in advance and is used to test the recall rate of the trained model
+m is used to increase the training data size inside the function through a loop (when applying the function)
+
+```{r}
+#m is the input from an outer loop defining the training size
+#j is the input from the inner loop for the different samplings and runs of the model
+train_size_test <- function(CR1,CR2,CR3,CR4,CR7,CR6,test,m) {
+ indices <- sample(1:nrow(CR1))
+  
+ fold <- cut(indices,breaks=9,labels=F)
+ 
+ acc_all= NULL
+
+
+ for (k in 1:9) {
+  #cat("processing fold #", k, "\n")
+   val_indices <- which(fold==k,arr.ind=T)
+   CR1_v <- CR1[val_indices,]
+   CR2_v <- CR2[val_indices,]
+   CR3_v <- CR3[val_indices,]
+   CR4_v <- CR4[val_indices,]
+   CR7_v <- CR7[val_indices,]
+   CR6_v <- CR6[val_indices,]
+   
+   val <- rbind(CR1_v,CR2_v,CR3_v,CR4_v,CR7_v,CR6_v)
+   val <- val[sample(nrow(val)),]
+   
+   CR1_train <- CR1[-val_indices,]
+   CR2_train <- CR2[-val_indices,]
+   CR3_train <- CR3[-val_indices,]
+   CR4_train <- CR4[-val_indices,]
+   CR7_train <- CR7[-val_indices,]
+   CR6_train <- CR6[-val_indices,]
+
+
+
+
+  #Startin the big loop
+  for (j in 1:10){
+  
+    #creating the training data 
+    CR1_t <- CR1_train[sample(m*500),]
+    CR2_t <- CR2_train[sample(m*500),]
+    CR3_t <- CR3_train[sample(m*500),]
+    CR4_t <- CR4_train[sample(m*500),]
+    CR7_t <- CR7_train[sample(m*500),]
+    CR6_t <- CR6_train[sample(m*500),]
+    train <- NULL
+    train <- rbind(CR1_t,CR2_t,CR3_t,CR4_t,CR7_t,CR6_t)
+    train <- train[sample(nrow(train)),]
+  
+
+    ##########################################################################################################
+    ##########################################################################################################
+    ##########################################################################################################
+    #First I need to scale the training data
+    ID <- train$ID
+    train <- select(train,-ID)
+    mean <- apply(train,2,mean)
+    std <- apply(train,2,sd)
+    train_sc <- scale(train,center=mean,scale=std)
+    train_sc <- as.data.frame(train_sc)
+    train_sc$ID <- ID
+
+ 
+    #Now I want to delete some features that do not help distinguishing the object
+    list=names(train_sc)
+    list <- list[list != 'ID'] # remove 'ID' which tells identity of the isolates
+    list <- list[list != 'Object.Number'] # removing the object number it is not needed
+    list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+    list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+    #apply the list back to the data frame
+    train_sc <- train_sc %>% dplyr::select(all_of(list),ID)
+  
+    #Scaling and delet uneccary columns for val 
+    ID <- val$ID
+    val_sc <- select(val,-ID)
+    val_sc <-scale(val_sc,center=mean,scale=std)
+    val_sc <- as.data.frame(val_sc)
+    val_sc$ID <- ID
+    val_sc <- val_sc %>% dplyr::select(all_of(list),ID)
+  
+    #and test
+    ID <- test$ID
+    test_sc <- select(test,-ID)
+    test_sc <- scale(test_sc,center=mean,scale=std)
+    test_sc <- as.data.frame(test_sc)
+    test_sc$ID <- ID
+    test_sc <- test_sc %>% dplyr::select(all_of(list),ID)
+    ##########################################################################################################
+    ##########################################################################################################
+    ##########################################################################################################
+    #Formating the data for the model
+    no_ID <- length(unique(train_sc$ID))
+    no_vars <- length(list)
+
+    #Formating the training and validation data
+    train_x <- train_sc[,1:(no_vars)] %>% as.matrix()
+    train_y <- train_sc$ID
+    train_y <- to_categorical(train_y, no_ID)
+ 
+    val_x <- val_sc[,1:(no_vars)] %>% as.matrix()
+    val_y <- val_sc$ID
+    val_y <- to_categorical(val_y, no_ID)
+ 
+    test_x <- test_sc[,1:(no_vars)] %>% as.matrix()
+    test_y <- test_sc$ID
+    test_y <- to_categorical(test_y, no_ID)  
+    ##########################################################################################################
+    ##########################################################################################################
+    ##########################################################################################################
+    #Running the model
+    model <- keras_model_sequential() 
+    model %>% 
+     layer_dense(units = 120,activation = 'relu', input_shape = c(no_vars)) %>% 
+     layer_dropout(rate = 0.5) %>% 
+     layer_dense(units = 30, activation = 'relu') %>%
+     layer_dropout(rate = 0.5) %>%  
+     layer_dense(units = no_ID, activation = 'softmax')
+   
+   
+    model %>% compile(
+     loss = 'categorical_crossentropy',
+     optimizer = optimizer_rmsprop(learning_rate = 0.001),
+     metrics = 'accuracy'
+    )
+   
+
+    hist_<-model %>% fit(
+     train_x, 
+     train_y, 
+     epochs = 70, 
+     batch_size = 800, 
+     validation_data = list(val_x, val_y ),
+     verbose = 0,
+    )
+   # ---------------accuracy of the model -------------------#
+    ev <- model %>% evaluate(test_x, test_y,verbose=0)
+
+  
+    #Predicting the results for the test data
+    predict <- model %>% predict(test_x)
+  
+    pred<-data.frame(real_ID=(test_sc$ID+1),pred_ID=0,acc=0,recall=0,real_phe=0,pred_phe=0,recall_phe=0)
+
+    #Comparing the predicted data with the real data
+    for (i in 1:nrow(predict)){
+      #Which clone is predicted by the model
+      pred$pred_ID[i]=which.max(predict[i,])
+      #With what accuracy is the model predicting it (probability)
+      pred$acc[i]=predict[i,which.max(predict[i,])]
+      #Is it the right clone (1=yes & 0=no)
+      pred$recall[i]<- pred$pred_ID[i]==pred$real_ID[i]
+      #Categorizing the clones into defended and undefended (clones 1,2,3 as defended and 4,5,6 as undefended)
+      if (pred$real_ID[i]<4) {pred$real_phe[i]="def"} else {pred$real_phe[i]="udef"}
+      if (pred$pred_ID[i]<4) {pred$pred_phe[i]="def"} else {pred$pred_phe[i]="udef"}
+      #How accurate is the model with the defended and undefended categories
+      pred$recall_phe[i] <- pred$real_phe[i]==pred$pred_phe[i]
+    }
+    #Saving basic informations of the runs
+    pred$run =j
+    pred$train_size=m*500
+    #Saving all the informations into one big list
+    #pred_all[[j]]=pred
+  
+    #Creating the lists in the function that I need to save the data
+    #pred_all=list()
+
+    acc= data.frame(recall=0,recall_pheno=0,run=0,train_size=0,avg_acc=0,ev_acc=0,ev_loss=0,val_split=0)
+  
+    #Here I am saving specific informations for a condensed dataframe
+    #Basic information on the runs
+    acc$run[1]=j;acc$train_size[1]=m*500;acc$val_split[1]=k
+    #Accurcay of the model for clones
+    acc$recall[1]=sum(pred$recall)/nrow(pred)
+    #Accurcay of the model for categories
+    acc$recall_pheno[1]=sum(pred$recall_phe/nrow(pred))
+    #Average probability with which the model predicts a certain clone
+    acc$avg_acc[1]=mean(pred$acc)
+    #The data from the evaluate function
+    acc$ev_loss[1]=ev[1]
+    acc$ev_acc[1]=ev[2]
+    #Saving all in one big dataframe
+    acc_all<-rbind(acc_all,acc)
+  }
+ }
+ return(acc_all)
+}
+
+```
+
+Loading in the data for the function
+
+```{r}
+setwd("../Data/Data for training size")
+CR1<-read.csv("CR1_AB_all.csv")
+CR2<-read.csv("CR2_AB_all.csv")
+CR3<-read.csv("CR3_AB_all.csv")
+CR4<-read.csv("CR4_AB_all.csv")
+CR7<-read.csv("CR7_AB_all.csv")
+CR6<-read.csv("CR6_AB_all.csv")
+
+#Deleting the added row from R
+CR1<-select(CR1,-X)
+CR2<-select(CR2,-X)
+CR3<-select(CR3,-X)
+CR4<-select(CR4,-X)
+CR7<-select(CR7,-X)
+CR6<-select(CR6,-X)
+ 
+test <- rbind(CR1[1:2000,],CR2[1:2000,],CR3[1:2000,],CR4[1:2000,],CR7[1:2000,],CR6[1:2000,]) 
+
+CR1 <- CR1[-c(1:2000),]
+CR2 <- CR2[-c(1:2000),]
+CR3 <- CR3[-c(1:2000),]
+CR4 <- CR4[-c(1:2000),]
+CR7 <- CR7[-c(1:2000),]
+CR6 <- CR6[-c(1:2000),]
+```
+
+Running the model in the function using a loop for increasing the training dat size
+
+```{r}
+ #pred_all_pop=list()
+acc_all_pop= NULL
+
+for (m in 1:32) {
+  acc_run<-train_size_test(CR1,CR2,CR3,CR4,CR7,CR6,test,m)
+  #pred_all_pop[[m]]=pred_all
+  acc_all_pop <- rbind(acc_all_pop,acc_run)
+}
+#write.csv(acc_all_pop,"Accuracy Train AB vs Test AB_long+validation_500step.csv")
+```

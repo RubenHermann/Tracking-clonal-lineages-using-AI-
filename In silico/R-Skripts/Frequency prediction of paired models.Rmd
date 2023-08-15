@@ -1,0 +1,134 @@
+---
+title: "Using the 1v1 models"
+author: "Ruben Hermann"
+date: '2022-05-02'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+
+library(keras)
+library(tidyverse)
+```
+
+## Writing a function which does the frequency tests
+
+```{r}
+freq_1v1 <- function(cloneA,cloneB){
+  
+  nmodel <- paste("Distinguish ",cloneA,"v",cloneB," clones with feature values.h5",sep="")  
+    
+  model <- load_model_hdf5(nmodel)
+  
+  dcloneA <- paste("../Data/Model configuration/",cloneA,"_data_for_training.csv",sep="")
+  cloneA_train <- read.csv(dcloneA)
+  dcloneB <- paste("../Data/Model configuration/",cloneB,"_data_for_training.csv",sep="")
+  cloneB_train <- read.csv(dcloneB)
+  train_all <- rbind(cloneA_train,cloneB_train)
+  train_all <- select(train_all,-X)
+  train_all <- select(train_all,-ID)
+  mean <- apply(train_all,2,mean)
+  std <- apply(train_all,2,sd)
+
+  
+  
+  name <-paste('../Data/Frequencies/',cloneA,'_',cloneB,sep="")
+  setwd(name)
+  temp= list.files(pattern=".csv")
+  listofdf<-list()
+  for (i in 1:length(temp)) {
+    assign(temp[i],read.csv(temp[i],))
+    listofdf[[i]]=read.csv(temp[i])}
+  names(listofdf) <- temp
+  
+
+  freq_dat_all=NULL
+   
+   
+  for (j in 1:length(listofdf)) {
+    df <- listofdf[[j]]
+    df <- df[,-(1:2)]
+    
+    
+    clones<-unique(df$ID)
+    
+    if (length(clones)>1) {
+    if(clones[1]>clones[2]) {cloneB_r=clones[1]}
+    if(clones[2]>clones[1]) {cloneB_r=clones[2]}}
+    
+    if (length(clones)==1) {cloneB_r=clones[1]}
+    
+    for (k in 1:nrow(df)) {
+      if (df$ID[k]==cloneB_r) {df$ID[k]=1} else {df$ID[k]=0}
+      if (j==length(listofdf)) {df$ID=0}
+    }
+    
+  
+    ID <- df$ID
+    df <- select(df,-ID)
+    df_sc <- scale(df,center=mean,scale=std)
+    df_sc <- as.data.frame(df_sc)
+    #df$ID <- ID
+  
+    #Now getting rid of the unecessary features
+    list=names(df_sc)
+    #list <- list[list != 'ID'] # remove 'ID' which tells identity of the isolates
+    list <- list[list != 'Object.Number'] # removing the object number it is not needed
+    list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+    list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+    #apply the list back to the data frame
+    df_sc <- df_sc %>% dplyr::select(all_of(list))
+  
+    #First getting rid of the ID column
+    no_vars=length(list)
+    test_x <- df_sc[,1:no_vars] %>% as.matrix
+    
+
+    predict <- model %>% predict(test_x)
+  
+    pred<-data.frame(real_ID=ID,pred_ID=0)
+
+    #Comparing the predicted data with the real data
+    for (i in 1:nrow(predict)){
+      #Which clone is predicted by the model
+      pred$pred_ID[i]=which.max(predict[i,])
+      #Categorizing the clones into defended and undefended (clones 1,2,3 as defended and 4,5,6 as undefended)
+    }
+    freq_dat <- data.frame(real_cloneB_freq=length(pred$real_ID[pred$real_ID==1])/length(pred$real_ID),
+                           pred_cloneB_freq=length(pred$pred_ID[pred$pred_ID==2])/length(pred$pred_ID),
+                           clone_B=cloneB,filename=temp[j])
+    
+    freq_dat_all <- rbind(freq_dat_all,freq_dat)
+  
+  }
+  return(freq_dat_all)
+}
+  
+```
+
+Running the model for predicting frequencies
+
+```{r}
+#CR1 frequencies
+CR1_CR2_freq <- freq_test("CR1","CR2")
+CR1_CR3_freq <- freq_test("CR1","CR3")
+CR1_CR4_freq <- freq_test("CR1","CR4")
+CR1_CR7_freq <- freq_test("CR1","CR7")
+CR1_CR6_freq <- freq_test("CR1","CR6")
+
+#CR2 frequencies
+CR2_CR3_freq <- freq_test("CR2","CR3")
+CR2_CR4_freq <- freq_test("CR2","CR4")
+CR2_CR7_freq <- freq_test("CR2","CR7")
+CR2_CR6_freq <- freq_test("CR2","CR6")
+
+#CR3 frequencies
+CR3_CR4_freq <- freq_test("CR3","CR4")
+CR3_CR7_freq <- freq_test("CR3","CR7")
+CR3_CR6_freq <- freq_test("CR3","CR6")
+
+#CR4 frequencies
+CR4_CR7_freq <- freq_test("CR4","CR7")
+CR4_CR6_freq <- freq_test("CR4","CR6")
+```

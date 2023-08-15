@@ -1,0 +1,202 @@
+---
+title: "Distinguish 6 clones"
+author: "Ruben Hermann"
+date: '2022-04-08'
+output: html_document
+---
+
+Loading packages and emptying list
+
+```{r, include=FALSE}
+rm(list=ls())
+
+library(keras)
+library(tidyverse)
+```
+
+Loading in the data
+
+```{r}
+#Reading in the model configuration adta
+name <-paste('../Data/Model configuration',sep="")
+  setwd(name)
+  temp= list.files(pattern=".csv")
+  listofdf<-list()
+  for (i in 1:length(temp)) {
+    assign(temp[i],read.csv(temp[i],))
+    listofdf[[i]]=read.csv(temp[i])}
+  names(listofdf) <- temp
+
+#Binding the data frames of the different clonal lineages together
+all_test<-rbind(CR1_data_for_test.csv,CR2_data_for_test.csv,CR3_data_for_test.csv,CR4_data_for_test.csv,CR6_data_for_test.csv,CR7_data_for_test.csv)  
+all_train<-rbind(CR1_data_for_training.csv,CR2_data_for_training.csv,CR3_data_for_training.csv,CR4_data_for_training.csv,CR6_data_for_training.csv,CR7_data_for_training.csv)  
+all_val<-rbind(CR1_data_for_validation.csv,CR2_data_for_validation.csv,CR3_data_for_validation.csv,CR4_data_for_validation.csv,CR6_data_for_validation.csv,CR7_data_for_validation.csv) 
+
+#deleting the X column
+all_test <- select(all_test,-X)
+all_train <- select(all_train,-X)
+all_val <- select(all_val,-X)
+
+#Randomizing the order of samples in the data frames
+all_train <- all_train[sample(nrow(all_train)),]
+all_val <- all_val[sample(nrow(all_val)),]
+all_test <- all_test[sample(nrow(all_test)),]
+```
+
+Scaling the data according to the mean and sd of the training data
+
+```{r}
+#First I need to normalize the training data
+ ID <- all_train$ID
+ all_train <- select(all_train,-ID)
+ mean <- apply(all_train,2,mean)
+ std <- apply(all_train,2,sd)
+ all_train_sc <- scale(all_train,center=mean,scale=std)
+ all_train_sc <- as.data.frame(all_train_sc)
+ all_train_sc$ID <- ID
+ all_train$ID <- ID
+
+ 
+#Now I want to delete some features that do not help distinguishing the object
+ list=names(all_train_sc)
+ list <- list[list != 'ID'] # remove 'ID' which tells identity of the isolates
+ list <- list[list != 'Object.Number'] # removing the object number it is not needed
+ list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+ list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+ #apply the list back to the data frame
+ all_train_sc <- all_train_sc %>% dplyr::select(all_of(list),ID)
+ 
+########################################################################################
+ #######################################################################################
+ #######################################################################################
+ 
+ #Now I need to normalize the other data frames as well
+ #First the validation
+ ID <- all_val$ID
+ all_val <- select(all_val,-ID)
+ all_val_sc <- scale(all_val,center=mean,scale=std)
+ all_val_sc <- as.data.frame(all_val_sc)
+ all_val$ID <- ID
+ all_val_sc$ID <- ID
+ 
+ #Now I want to delete some features that do not help distinguishing the object
+ all_val_sc <- all_val_sc %>% dplyr::select(all_of(list),ID)
+ 
+ 
+ ########################################################################################
+ #######################################################################################
+ #######################################################################################
+ #Second the test
+ ID <- all_test$ID
+ all_test <- select(all_test,-ID)
+ all_test_sc <- scale(all_test,center=mean,scale=std)
+ all_test_sc <- as.data.frame(all_test_sc)
+ all_test$ID <- ID
+ all_test_sc$ID <- ID
+
+ #Now I want to delete some features that do not help distinguishing the object
+ all_test_sc <- all_test_sc %>% dplyr::select(all_of(list),ID)
+ 
+```
+
+Setting the data frames to the right format using keras commands
+
+```{r}
+no_ID <- length(unique(all_train_sc$ID))
+no_vars <- length(list)
+
+ #Formating the training and validation data
+ train_x <- all_train_sc[,1:(no_vars)] %>% as.matrix()
+ train_y <- all_train_sc$ID
+ train_y <- to_categorical(train_y, no_ID)
+ 
+ val_x <- all_val_sc[,1:(no_vars)] %>% as.matrix()
+ val_y <- all_val_sc$ID
+ val_y <- to_categorical(val_y, no_ID)
+ 
+ test_x <- all_test_sc[,1:(no_vars)] %>% as.matrix()
+ test_y <- all_test_sc$ID
+ test_y <- to_categorical(test_y, no_ID)  
+```
+
+Creating the 6clone model
+
+```{r}
+
+model <- keras_model_sequential() 
+model %>% 
+     layer_dense(units = 120,activation = 'relu', input_shape = c(no_vars)) %>% 
+     layer_dropout(rate = 0.5) %>% 
+     layer_dense(units = 30, activation = 'relu') %>%
+     layer_dropout(rate = 0.5) %>%  
+     layer_dense(units = no_ID, activation = 'softmax')
+   
+
+   
+model %>% compile(
+     loss = 'categorical_crossentropy',
+     optimizer = optimizer_rmsprop(learning_rate = 0.001),
+     metrics = 'accuracy'
+   )
+   
+   
+   
+   
+hist_<-model %>% fit(
+     train_x, 
+     train_y, 
+     epochs = 70, 
+     batch_size = 800, 
+     validation_data = list(val_x, val_y ),
+     #verbose = 0,
+   )
+
+   # ---------------accuracy of the model -------------------#
+model %>% evaluate(test_x, test_y,verbose=0)
+
+predict <- model %>% predict(test_x)
+
+save_model_hdf5(model,"Distinguish 6 clones with feature values.h5")
+```
+
+Checking the recall rate of the predictions
+First a general check on the recall rate predicted clonal lineage and on the recall rate of the phenotype of the clonal lineage
+
+Second, using a higher certainty (90%) for the model when predicting a clonal lineage and checking the recall rate
+
+```{r}
+pred<-data.frame(real_ID=(all_test_sc$ID+1),pred_ID=6,acc=0,recall=0,real_phe=0,pred_phe=0,recall_phe=0)
+
+
+for (i in 1:nrow(predict)){
+  pred$pred_ID[i]=which.max(predict[i,])
+  pred$acc[i]=predict[i,which.max(predict[i,])]
+  pred$recall[i]<- pred$pred_ID[i]==pred$real_ID[i]
+      if (pred$real_ID[i]<4) {pred$real_phe[i]="def"} 
+      if (pred$real_ID[i]==4) {pred$real_phe[i]="udef"}
+      if (pred$real_ID[i]>4) {pred$real_phe[i]="inter"}
+      if (pred$pred_ID[i]<4) {pred$pred_phe[i]="def"} 
+      if (pred$pred_ID[i]==4) {pred$pred_phe[i]="udef"} 
+      if (pred$pred_ID[i]>4) {pred$pred_phe[i]="inter"} 
+  pred$recall_phe[i] <- pred$real_phe[i]==pred$pred_phe[i]
+ }
+pred
+
+sum(pred$recall)/nrow(pred)
+sum(pred$recall_phe/nrow(pred))
+mean(pred$acc)
+
+#Creating a new data frame
+pred_high <- data.frame(real_ID=0,pred_ID=0,acc=0,recall=0,real_phe=0,pred_phe=0,recall_phe=0)
+
+#taking only the prediction with a cartainty of 90%
+for (i in 1:nrow(pred)) {
+  if (pred$acc[i]>0.9)
+  { pred_high[i,]=pred[i,]}
+}
+
+pred_high<-na.omit(pred_high)
+nrow(pred_high)/nrow(pred)
+sum(pred_high$recall)/nrow(pred_high)
+sum(pred_high$recall_phe/nrow(pred_high))
+```

@@ -1,0 +1,171 @@
+---
+title: "Creating 1v1 models"
+author: "Ruben Hermann"
+date: '2022-04-29'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+
+knitr::opts_chunk$set(echo = TRUE)
+library(keras)
+library(tidyverse)
+```
+
+## The function to call for training a model for two different clones
+
+```{r}
+model1v1 <- function(cloneA,cloneB) {
+  #getting the correct filepaths
+  cloneA_train <- paste('../Data/Model configuration/',cloneA,'_data_for_training.csv',sep="")
+  cloneA_test <- paste('../Data/Model configuration/',cloneA,'_data_for_test.csv',sep="")
+  cloneA_val <- paste('../Data/Model configuration/',cloneA,'_data_for_validation.csv',sep="")
+  
+  cloneB_train <- paste('../Data/Model configuration/',cloneB,'_data_for_training.csv',sep="")
+  cloneB_test <- paste('../Data/Model configuration/',cloneB,'_data_for_test.csv',sep="")
+  cloneB_val <- paste('../Data/Model configuration/',cloneB,'_data_for_validation.csv',sep="")
+  
+  #reading in the different csv files
+  cloneA_train_dat <-read.csv(cloneA_train)
+  cloneA_test_dat <-read.csv(cloneA_test)
+  cloneA_val_dat <-read.csv(cloneA_val)
+  
+  cloneB_train_dat <-read.csv(cloneB_train)
+  cloneB_test_dat <-read.csv(cloneB_test)
+  cloneB_val_dat <-read.csv(cloneB_val)
+
+  #adding the ID
+  cloneA_train_dat$ID <- 0
+  cloneA_test_dat$ID <- 0
+  cloneA_val_dat$ID <- 0
+
+  cloneB_train_dat$ID <- 1
+  cloneB_test_dat$ID <- 1
+  cloneB_val_dat$ID <- 1
+  
+  #binding them together to one dataframe
+  all_train <- rbind(cloneA_train_dat,cloneB_train_dat)
+  all_val <- rbind(cloneA_val_dat,cloneB_val_dat)
+  all_test <- rbind(cloneA_test_dat,cloneB_test_dat)
+
+  all_train <- select(all_train,-X)
+  all_val <- select(all_val,-X)
+  all_test <- select(all_test,-X)
+
+  all_train <- all_train[sample(nrow(all_train)),]
+  all_val <- all_val[sample(nrow(all_val)),]
+  all_test <- all_test[sample(nrow(all_test)),]
+
+  #First I need to normalize the training data
+  #normalize
+  ID <- all_train$ID
+  all_train <- select(all_train,-ID)
+  mean <- apply(all_train,2,mean)
+  std <- apply(all_train,2,sd)
+  all_train_sc <- scale(all_train,center=mean,scale=std)
+  all_train_sc <- as.data.frame(all_train_sc)
+  all_train_sc$ID <- ID
+  #all_train$ID <- ID
+
+ 
+  #Now I want to delete some features that do not help distinguishing the object
+  list=names(all_train_sc)
+  list <- list[list != 'ID'] # remove 'ID' which tells identity of the isolates
+  list <- list[list != 'Object.Number'] # removing the object number it is not needed
+  list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+  list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+  #apply the list back to the data frame
+  all_train_sc <- all_train_sc %>% dplyr::select(all_of(list),ID)
+ 
+########################################################################################
+ #######################################################################################
+ #######################################################################################
+ 
+  #Now I need to normalize the other data frames as well
+  #First the validation
+  ID <- all_val$ID
+  all_val <- select(all_val,-ID)
+  all_val_sc <- scale(all_val,center=mean,scale=std)
+  all_val_sc <- as.data.frame(all_val_sc)
+  all_val_sc$ID <- ID
+ 
+  #Now I want to delete some features that do not help distinguishing the object
+  all_val_sc <- all_val_sc %>% dplyr::select(all_of(list),ID)
+ 
+ 
+ ########################################################################################
+ #######################################################################################
+ #######################################################################################
+  #Second the test
+  ID <- all_test$ID
+  all_test <- select(all_test,-ID)
+  all_test_sc <- scale(all_test,center=mean,scale=std)
+  all_test_sc <- as.data.frame(all_test_sc)
+  all_test_sc$ID <- ID
+
+  #Now I want to delete some features that do not help distinguishing the object
+  all_test_sc <- all_test_sc %>% dplyr::select(all_of(list),ID)
+
+  no_ID <- length(unique(all_train_sc$ID))
+  no_vars <- length(list)
+
+  #Formating the training and validation data
+  train_x <- all_train_sc[,1:(no_vars)] %>% as.matrix()
+  train_y <- all_train_sc$ID
+  train_y <- to_categorical(train_y, no_ID)
+ 
+  val_x <- all_val_sc[,1:(no_vars)] %>% as.matrix()
+  val_y <- all_val_sc$ID
+  val_y <- to_categorical(val_y, no_ID)
+ 
+  test_x <- all_test_sc[,1:(no_vars)] %>% as.matrix()
+  test_y <- all_test_sc$ID
+  test_y <- to_categorical(test_y, no_ID) 
+
+
+  model <- keras_model_sequential() 
+  model %>% 
+     layer_dense(units = 120,activation = 'relu', input_shape = c(no_vars)) %>% 
+     layer_dropout(rate = 0.5) %>% 
+     layer_dense(units = 30, activation = 'relu') %>%
+     layer_dropout(rate = 0.5) %>%  
+     layer_dense(units = no_ID, activation = 'softmax')
+   
+
+   
+  model %>% compile(
+     loss = 'categorical_crossentropy',
+     optimizer = optimizer_rmsprop(learning_rate = 0.001),
+     metrics = 'accuracy'
+   )
+   
+  history<-model %>% fit(
+     train_x, 
+     train_y, 
+     epochs = 70, 
+     batch_size = 800, 
+     validation_data = list(val_x, val_y ),
+   )
+   all <- list(trainx=train_x,trainy=train_y,valx=val_x,valy=val_y,testx=test_x,testy=test_y,smodel=model)
+}
+   # ---------------accuracy of the model -------------------#
+```
+
+
+## Train the model and evaluate
+
+```{r}
+all <- model1v1("CR1","CR7")
+
+model <- all$smodel
+test_x <- all$testx
+test_y <- all$testy
+model %>% evaluate(test_x, test_y,verbose=0)
+```
+### Save the model
+```{r}
+save_model_hdf5(model,"Distinguish CR6vCR7 clones with feature values_new.h5")
+
+````
+

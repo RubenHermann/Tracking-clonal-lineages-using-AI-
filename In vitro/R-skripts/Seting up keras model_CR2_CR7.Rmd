@@ -1,0 +1,139 @@
+---
+title: "Preparing data for accurcay testing for training size"
+author: "Ruben Hermann"
+date: '2022-04-21'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+
+knitr::opts_chunk$set(echo = TRUE)
+library(keras)
+library(tidyverse)
+```
+
+Loading in the data 
+
+```{r}
+setwd("../Data/Data for model set-up")
+Train_CR2 <- read.csv("Train_CR2.csv")
+Train_CR7 <- read.csv("Train_CR7.csv")
+
+Val_CR2 <- read.csv("Val_CR2.csv")
+Val_CR7 <- read.csv("Val_CR7.csv")
+
+Test_CR2 <- read.csv("Test_CR2.csv")
+Test_CR7 <- read.csv("Test_CR7.csv")
+```
+
+
+## Training the model with the new data
+```{r}
+#binding them together to one dataframe
+all_train <- rbind(Train_CR2,Train_CR7)
+all_val <- rbind(Val_CR2,Val_CR7)
+all_test <- rbind(Test_CR2,Test_CR7)
+
+#Deleting the X column created by R when saving a csv file
+all_train<-select(all_train,-X)
+all_val<-select(all_val,-X)
+all_test<-select(all_test,-X)
+
+#Randomizing the samples in the dataframes
+all_train <- all_train[sample(nrow(all_train)),]
+all_val <- all_val[sample(nrow(all_val)),]
+all_test <- all_test[sample(nrow(all_test)),]
+
+#First I need to scale the training data
+ID<-all_train$ID
+all_train <- select(all_train,-ID)
+mean <- apply(all_train,2,mean)
+std <- apply(all_train,2,sd)
+all_train_sc <- scale(all_train,center=mean,scale=std)
+all_train_sc <- as.data.frame(all_train_sc)
+all_train_sc$ID <- ID
+
+
+#Now I want to delete some features that do not help distinguishing the object
+list=names(all_train_sc)
+list <- list[list != 'ID'] # remove 'ID' which tells identity of the isolates
+list <- list[list != 'Object.Number'] # removing the object number it is not needed
+list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+#apply the list back to the data frame
+all_train_sc <- all_train_sc %>% dplyr::select(all_of(list),ID)
+ 
+########################################################################################
+ #######################################################################################
+ #######################################################################################
+ 
+#Now I need to scale the other data frames as well
+#First the validation
+ID <- all_val$ID
+all_val <- select(all_val,-ID)
+all_val_sc <- scale(all_val,center=mean,scale=std)
+all_val_sc <- as.data.frame(all_val_sc)
+all_val_sc$ID <- ID
+ 
+#Now I want to delete some features that do not help distinguishing the object
+all_val_sc <- all_val_sc %>% dplyr::select(all_of(list),ID)
+ 
+ 
+ ########################################################################################
+ #######################################################################################
+ #######################################################################################
+  #Second the test
+ID <- all_test$ID
+all_test <- select(all_test,-ID)
+all_test_sc <- scale(all_test,center=mean,scale=std)
+all_test_sc <- as.data.frame(all_test_sc)
+all_test_sc$ID <- ID
+
+#Now I want to delete some features that do not help distinguishing the object
+all_test_sc <- all_test_sc %>% dplyr::select(all_of(list),ID)
+
+no_ID <- length(unique(all_train_sc$ID))
+no_vars <- length(list)
+
+#Formating the training and validation data
+train_x <- all_train_sc[,1:(no_vars)] %>% as.matrix()
+train_y <- all_train_sc$ID
+train_y <- to_categorical(train_y, no_ID)
+
+ 
+val_x <- all_val_sc[,1:(no_vars)] %>% as.matrix()
+val_y <- all_val_sc$ID
+val_y <- to_categorical(val_y, no_ID)
+ 
+test_x <- all_test_sc[,1:(no_vars)] %>% as.matrix()
+test_y <- all_test_sc$ID
+test_y <- to_categorical(test_y, no_ID) 
+ 
+
+model <- keras_model_sequential() 
+model %>% 
+   layer_dense(units = 120,activation = 'relu', input_shape = c(no_vars)) %>% 
+   layer_dropout(rate = 0.5) %>% 
+   layer_dense(units = 30, activation = 'relu') %>%
+   layer_dropout(rate = 0.5) %>%  
+   layer_dense(units = no_ID, activation = 'softmax')
+   
+
+   
+model %>% compile(
+   loss = 'categorical_crossentropy',
+   optimizer = optimizer_rmsprop(learning_rate = 0.001),
+   metrics = 'accuracy'
+ )
+  
+history<-model %>% fit(
+   train_x, 
+   train_y, 
+   epochs = 70, 
+   batch_size = 800, 
+   validation_data = list(val_x, val_y ))
+
+save_model_hdf5(model,"Distinguish CR2vCR7 clones with feature values_in_vitro.h5")
+```
+

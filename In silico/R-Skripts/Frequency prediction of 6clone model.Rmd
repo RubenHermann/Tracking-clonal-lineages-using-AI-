@@ -1,0 +1,139 @@
+---
+title: "6 clones frequency test"
+author: "Ruben Hermann"
+date: '2022-04-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+
+library(keras)
+library(tidyverse)
+```
+
+## Loading the model
+
+```{r}
+model<-load_model_hdf5("Distinguish 6 clones with feature values.h5")
+```
+
+
+## Writing the function for predicting the frequencies of different clonal lineages and frequencies dependend on phenotypic groups with the 6clone model
+
+```{r}
+freq_test <- function(cloneA,cloneB) {
+  # loading in the correpsonding training data and calculating the mean and sd for scaling
+  cloneA_path <- paste('../Data/Model configuration/',cloneA,'_data_for_training.csv',sep="")
+  cloneB_path <- paste('../Data/Model configuration/',cloneB,'_data_for_training.csv',sep="")
+  cloneA_train <-read.csv(cloneA_path)
+  cloneB_train <-read.csv(cloneB_path)
+  train <- rbind(cloneA_train,cloneB_train)
+  train <- select(train,-X)
+  mean<-apply(train,2,mean)
+  std <- apply(train,2,sd)
+  
+  name <-paste('../Data/Frequencies/',cloneA,'_',cloneB,sep="")
+  setwd(name)
+  temp= list.files(pattern=".csv")
+  listofdf<-list()
+  for (i in 1:length(temp)) {
+    assign(temp[i],read.csv(temp[i],))
+    listofdf[[i]]=read.csv(temp[i])}
+  names(listofdf) <- temp
+  
+  #Determining clone A for frequency calculation
+  freq_clone_B= unique(listofdf[[1]]$ID)+1
+  freq_clone_A= unique(listofdf[[11]]$ID)+1
+  
+  if(freq_clone_B<4) {freq_phe_B="def"}
+  if(freq_clone_B==4) {freq_phe_B="udef"}
+  if(freq_clone_B>4) {freq_phe_B="inter"}
+  
+  if(freq_clone_A<4) {freq_phe_A="def"}
+  if(freq_clone_A==4) {freq_phe_A="udef"}
+  if(freq_clone_A>4) {freq_phe_A="inter"}
+  
+  freq_dat_all=NULL
+  
+
+  for (j in 1:length(listofdf)) {
+    df <- listofdf[[j]]
+    df <- df[,-(1:2)]
+  
+    ID <- df$ID
+    df <- select(df,-ID)
+    df_sc <- scale(df,center=mean,scale=std)
+    df_sc <- as.data.frame(df_sc)
+    df$ID <- ID
+  
+    #Now getting rid of the unecessary features
+    list=names(df_sc)
+    list <- list[list != 'ID'] # remove 'ID' which tells identity of the isolates
+    list <- list[list != 'Object.Number'] # removing the object number it is not needed
+    list <- list[!str_detect(list, 'Saturation')] #remove Saturation Perc as it always is 0
+    list <- list[!str_detect(list, 'Bkgd')] #remove Background information
+    #apply the list back to the data frame
+    df_sc <- df_sc %>% dplyr::select(all_of(list))
+  
+
+    no_vars=length(list)
+    test_x <- df_sc[,1:no_vars] %>% as.matrix
+
+    predict <- model %>% predict(test_x)
+  
+    pred<-data.frame(real_ID=(ID+1),pred_ID=0,real_phe=0,pred_phe=0)
+
+    #Comparing the predicted data with the real data
+    for (i in 1:nrow(predict)){
+      #Which clone is predicted by the model
+      pred$pred_ID[i]=which.max(predict[i,])
+      #Categorizing the clones into defended and undefended (clones 1,2,3 as defended and 4,5,6 as undefended)
+      if (pred$real_ID[i]<4) {pred$real_phe[i]="def"} 
+      if (pred$real_ID[i]==4) {pred$real_phe[i]="udef"}
+      if (pred$real_ID[i]>4) {pred$real_phe[i]="inter"}
+      if (pred$pred_ID[i]<4) {pred$pred_phe[i]="def"} 
+      if (pred$pred_ID[i]==4) {pred$pred_phe[i]="udef"} 
+      if (pred$pred_ID[i]>4) {pred$pred_phe[i]="inter"} 
+    }
+    freq_dat <- data.frame(real_cloneB_freq=length(pred$real_ID[pred$real_ID==freq_clone_B])/nrow(pred),
+                           real_cloneA_freq=length(pred$real_ID[pred$real_ID==freq_clone_A])/nrow(pred),
+                           pred_cloneB_freq=length(pred$pred_ID[pred$pred_ID==freq_clone_B])/(length(pred$pred_ID[pred$pred_ID==freq_clone_A])+length(pred$pred_ID[pred$pred_ID==freq_clone_B])),
+                           
+                           real_pheB_freq=length(pred$real_phe[pred$real_phe==freq_phe_B])/nrow(pred),
+                           real_pheA_freq=length(pred$real_phe[pred$real_phe==freq_phe_A])/nrow(pred),
+                           pred_pheB_freq=length(pred$pred_phe[pred$pred_phe==freq_phe_B])/(length(pred$pred_phe[pred$pred_phe==freq_phe_A])+length(pred$pred_phe[pred$pred_phe==freq_phe_B])),
+                           
+                           clone_B=cloneB,clone_A=cloneA,filename=temp[j])
+    
+    freq_dat_all <- rbind(freq_dat_all,freq_dat)
+}
+return(freq_dat_all)
+}
+```
+
+Running the model for predicting frequencies
+
+```{r}
+#CR1 frequencies
+CR1_CR2_freq <- freq_test("CR1","CR2")
+CR1_CR3_freq <- freq_test("CR1","CR3")
+CR1_CR4_freq <- freq_test("CR1","CR4")
+CR1_CR7_freq <- freq_test("CR1","CR7")
+CR1_CR6_freq <- freq_test("CR1","CR6")
+
+#CR2 frequencies
+CR2_CR3_freq <- freq_test("CR2","CR3")
+CR2_CR4_freq <- freq_test("CR2","CR4")
+CR2_CR7_freq <- freq_test("CR2","CR7")
+CR2_CR6_freq <- freq_test("CR2","CR6")
+
+#CR3 frequencies
+CR3_CR4_freq <- freq_test("CR3","CR4")
+CR3_CR7_freq <- freq_test("CR3","CR7")
+CR3_CR6_freq <- freq_test("CR3","CR6")
+
+#CR4 frequencies
+CR4_CR7_freq <- freq_test("CR4","CR7")
+CR4_CR6_freq <- freq_test("CR4","CR6")
+```
